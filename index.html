@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SocialSense - Hackathon Demo</title>
+    <style>
+        /* Cyberpunk / High-Tech Hackathon Styling */
+        body {
+            margin: 0;
+            background-color: #0d0d0d;
+            color: #00ffcc;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        #container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border: 2px solid #333;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.2);
+            background: #000;
+        }
+
+        video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1); /* Mirror effect */
+            object-fit: cover;
+            border-radius: 8px;
+            opacity: 0.6;
+        }
+
+        canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            transform: scaleX(-1);
+            z-index: 2;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 3;
+            pointer-events: none;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        #status-bar {
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-left: 4px solid #00ffcc;
+            font-size: 14px;
+        }
+
+        #live-whisper {
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 15px;
+            font-size: 18px;
+            text-align: center;
+            border-radius: 8px;
+            border: 1px solid #00ffcc;
+            min-height: 50px;
+            transition: all 0.3s ease;
+        }
+
+        .highlight {
+            color: #00ffcc;
+            font-weight: bold;
+        }
+
+        #start-btn {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            padding: 15px 30px;
+            font-size: 20px;
+            background: #00ffcc;
+            color: #000;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 0 15px #00ffcc;
+        }
+        
+        #loading {
+            position: absolute;
+            top: 65%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            color: white;
+            font-size: 14px;
+            display: none;
+        }
+    </style>
+    <!-- Import MediaPipe via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <div id="container">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="output_canvas"></canvas>
+        
+        <div id="ui-layer">
+            <div id="status-bar">
+                SYSTEM STATUS: <span id="sys-status">OFFLINE</span><br>
+                SOCIAL SENSOR: <span id="social-status">WAITING...</span>
+            </div>
+            <div id="live-whisper">
+                "Press Start to activate SocialSense..."
+            </div>
+        </div>
+
+        <button id="start-btn" onclick="startApp()">INITIALIZE SYSTEM</button>
+        <div id="loading">Loading AI Models...</div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('webcam');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const statusSpan = document.getElementById('sys-status');
+        const socialSpan = document.getElementById('social-status');
+        const whisperBox = document.getElementById('live-whisper');
+        const startBtn = document.getElementById('start-btn');
+        const loadingText = document.getElementById('loading');
+
+        let faceMesh, hands;
+        let lastSpokenTime = 0;
+        let isSpeaking = false;
+
+        // --- 1. SETUP MEDIAPIPE ---
+        function onResults(results) {
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            
+            // Draw Hand Landmarks
+            if (results.multiHandLandmarks) {
+                for (const landmarks of results.multiHandLandmarks) {
+                    drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#00ffcc', lineWidth: 2});
+                    drawLandmarks(canvasCtx, landmarks, {color: '#ff0000', lineWidth: 1});
+                }
+            }
+
+            // Draw Face Mesh
+            if (results.multiFaceLandmarks) {
+                for (const landmarks of results.multiFaceLandmarks) {
+                    drawConnectors(canvasCtx, landmarks, FACEMESH_TESSELATION, {color: '#C0C0C070', lineWidth: 1});
+                }
+            }
+            canvasCtx.restore();
+
+            // --- 2. SOCIAL LOGIC ANALYZER ---
+            analyzeSocialCues(results);
+        }
+
+        async function startApp() {
+            startBtn.style.display = 'none';
+            loadingText.style.display = 'block';
+            statusSpan.innerText = "LOADING MODELS...";
+
+            // Initialize Face Mesh
+            faceMesh = new FaceMesh({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`});
+            faceMesh.setOptions({maxNumFaces: 1, refinerLandmarks: true, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+            faceMesh.onResults(onResults);
+
+            // Initialize Hands
+            hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            hands.setOptions({maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5});
+            
+            // Combined Logic Wrapper (Since we need to send video to both)
+            // Note: For a simple hackathon demo, we will alternate frames or just run FaceMesh primarily 
+            // and rely on a simpler integrated loop. However, standard MediaPipe JS requires separate sends.
+            // To keep this file simple and single-threaded, we will use a camera loop that sends to both.
+            
+            setupCamera();
+        }
+
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            videoElement.srcObject = stream;
+            
+            videoElement.onloadedmetadata = () => {
+                canvasElement.width = videoElement.videoWidth;
+                canvasElement.height = videoElement.videoHeight;
+                loadingText.style.display = 'none';
+                statusSpan.innerText = "ONLINE - SCANNING";
+                statusSpan.style.color = "#00ffcc";
+                processVideo();
+            };
+        }
+
+        async function processVideo() {
+            if(!videoElement.paused && !videoElement.ended) {
+                await faceMesh.send({image: videoElement});
+                await hands.send({image: videoElement});
+                requestAnimationFrame(processVideo);
+            }
+        }
+
+        // --- 3. INTELLIGENT SOCIAL ANALYSIS ---
+        function analyzeSocialCues(results) {
+            let socialState = "Neutral";
+            let description = "";
+
+            // A. FACE ANALYSIS (Smiling?)
+            if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+                const face = results.multiFaceLandmarks[0];
+                
+                // Lip landmarks: Upper(13), Lower(14), Left Corner(61), Right Corner(291)
+                // Simple Smile Logic: Corners are higher/wider relative to center
+                const leftCorner = face[61];
+                const rightCorner = face[291];
+                const upperLip = face[13];
+                
+                // Calculate basic smile ratio
+                const mouthWidth = Math.abs(rightCorner.x - leftCorner.x);
+                // In a real hackathon, print these values to console to calibrate!
+                if (mouthWidth > 0.45) { 
+                    socialState = "Happy / Smiling";
+                    description = "The person is smiling broadly at you.";
+                }
+            }
+
+            // B. HAND ANALYSIS (Waving or Handshake?)
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                const hand = results.multiHandLandmarks[0];
+                const wrist = hand[0];
+                const middleTip = hand[12];
+
+                // Waving: Hand is high up (y is smaller when higher in canvas coordinates)
+                if (wrist.y < 0.4) { 
+                    socialState = "Waving / Greeting";
+                    description = "Someone is waving to get your attention.";
+                } 
+                // Handshake: Hand is lower and extended towards camera (z-depth check is hard in 2D, we use simple positioning)
+                else if (wrist.y > 0.5 && wrist.y < 0.8) {
+                    socialState = "Handshake Offered";
+                    description = "A hand is extended for a handshake.";
+                }
+            }
+
+            // Update UI
+            if (socialState !== "Neutral") {
+                socialSpan.innerText = socialState;
+                socialSpan.style.color = "#ffff00";
+                speak(description);
+            } else {
+                socialSpan.innerText = "No strong cues";
+                socialSpan.style.color = "#777";
+            }
+        }
+
+        // --- 4. TEXT TO SPEECH (Audio Whispers) ---
+        function speak(text) {
+            const now = Date.now();
+            // Cooldown: Don't repeat yourself every frame (wait 4 seconds)
+            if (now - lastSpokenTime > 4000 && text !== "") {
+                whisperBox.innerHTML = `AI Whisper: <span class="highlight">"${text}"</span>`;
+                
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.rate = 1.1; // Slightly faster
+                utterance.pitch = 1;
+                utterance.volume = 1;
+                window.speechSynthesis.speak(utterance);
+                
+                lastSpokenTime = now;
+            }
+        }
+    </script>
+</body>
+</html>
